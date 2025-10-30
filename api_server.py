@@ -44,6 +44,7 @@ async def post_download(req: DownloadRequest):
         return {"ok": True, "result": result, "status_code": status, "tor_index": tor_index}
     except Exception as e:
         # لاگ کردن خطا داخل سرور مفیده (اینجا فقط بازگشت به کلاینت)
+        await async_log_request(url, None, 500)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 # optional simple GET wrapper (for quick manual testing)
