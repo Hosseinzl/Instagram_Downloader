@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: insta-tor-app
+    volumes:
+      - ./:/app
+      - ./tor_instances:/app/tor_instances
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

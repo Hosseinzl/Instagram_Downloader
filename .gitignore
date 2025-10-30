@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+.env
+
+# Virtual environments
+venv/
+.env
+.env/
+.venv/
+env/
+
+# VS Code
+.vscode/
+
+# Editor directories and files
+.idea/
+*.swp
+.DS_Store
+
+# Tor instances and data
+tor_instances/
+*.log
+
+# Docker
+*.tar
+*.log
+
+# OS files
+Thumbs.db
