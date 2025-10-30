@@ -312,13 +312,7 @@ async def download(url="", trys=1):
             raw_json = match.group(1)
             raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
             parsed = json.loads(raw_json)
-            media = None
-            try:
-                media = parsed["context"]["media"]
-            except Exception as e:
-                print(f"⚠️ Error parsing media from JSON: {e}")
-                print(json.dumps(parsed, indent=2)[:1000])
-                return None, status_code, (idx if 'idx' in locals() else None)
+            media = parsed["context"]["media"]
             id_ = media["id"]
             shortcode = media["shortcode"]
             typename = media["__typename"]
@@ -376,8 +370,6 @@ async def download(url="", trys=1):
                 }
             return data_dict, status_code, (idx if 'idx' in locals() else None)
         else:
-            print("⚠️ No contextJSON found in page HTML.")
-            print(data[:500])  # فقط 500 کاراکتر اول برای نمونه
             # Fallback HTML parsing
             soup = BeautifulSoup(data, "html.parser")
             image_element = soup.select_one(".EmbeddedMedia img")
