@@ -6,3 +6,4 @@ stem
 fastapi
 uvicorn[standard]
 pydantic
+requests[socks]
