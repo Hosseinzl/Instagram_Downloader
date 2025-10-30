@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import requests
 import json
 import re
@@ -10,6 +11,10 @@ from TorPool import get_tor_pool
 
 # create a reusable Stealth instance
 stealth = Stealth()
+
+# module logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
 # Tor pool singleton used by this module
 tor_pool = get_tor_pool()
@@ -127,6 +132,12 @@ def default_headers():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     }
 
+def _log_request_start(url, idx=None):
+    try:
+        logger.info("Request start: url=%s tor_index=%s", url, str(idx))
+    except Exception:
+        pass
+
 def parse_carousel(carousel_media=None):
     if carousel_media is None:
         carousel_media = []
@@ -211,16 +222,18 @@ def download2(short_code=""):
         # Prefer the async interface when calling from async code.
         try:
             # attempt to synchronously obtain an index/port via the pool (best-effort)
-            proxies, _ = asyncio.get_event_loop().run_until_complete(tor_pool.get_next_proxies())
+            proxies, idx = asyncio.get_event_loop().run_until_complete(tor_pool.get_next_proxies())
         except Exception:
             # fallback to default socks port
             proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+            idx = None
 
+        _log_request_start(f"https://www.instagram.com/p/{short_code}/?direct=true", idx)
         response = requests.get(f"https://www.instagram.com/p/{short_code}/?direct=true", headers=default_headers(), proxies=proxies, timeout=30)
         response.raise_for_status()
         return parse_post(response.text)
     except Exception as err:
-        print(f"download2: {err}")
+        logger.exception("download2 failed for shortcode=%s (tor_index=%s): %s", short_code, locals().get('idx'), err)
         return None
 
 # tor_renew function is not defined in the original code, so implementing a stub

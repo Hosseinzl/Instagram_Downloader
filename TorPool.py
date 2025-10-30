@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from typing import Tuple, Dict, Optional
 from stem.control import Controller
@@ -18,6 +19,9 @@ class TorPool:
         self.control_ports = [control_start + i * 2 for i in range(count)]
         self._index = 0
         self._lock = asyncio.Lock()
+        # logger
+        self._logger = logging.getLogger(__name__)
+        self._logger.info("TorPool initialized: count=%d socks=%s control=%s", self.count, self.socks_ports,)
 
     async def get_next_index(self) -> int:
         async with self._lock:
@@ -33,6 +37,11 @@ class TorPool:
             "http": f"socks5h://127.0.0.1:{port}",
             "https": f"socks5h://127.0.0.1:{port}",
         }
+        # log the proxy selection
+        try:
+            self._logger.debug("Selected tor index=%d socks_port=%d", idx, port)
+        except Exception:
+            pass
         return proxies, idx
 
     def _renew_sync(self, idx: int) -> bool:
@@ -41,6 +50,7 @@ class TorPool:
             return False
         control_port = self.control_ports[idx]
         try:
+            self._logger.info("Attempting NEWNYM on control port %d (index=%d)", control_port, idx)
             with Controller.from_port(port=control_port) as c:
                 try:
                     c.authenticate()
@@ -48,8 +58,13 @@ class TorPool:
                     # Try without password (some setups don't require auth)
                     c.authenticate()
                 c.signal("NEWNYM")
+            self._logger.info("NEWNYM signalled successfully for index=%d", idx)
             return True
         except Exception:
+            try:
+                self._logger.exception("Failed to send NEWNYM to control port %d (index=%d)", control_port, idx)
+            except Exception:
+                pass
             return False
 
     async def renew(self, idx: Optional[int] = None, timeout: float = 5.0) -> bool:
@@ -63,9 +78,15 @@ class TorPool:
                 idx = (self._index - 1) % self.count
 
         try:
+            self._logger.debug("Scheduling renew for index=%s", str(idx))
             result = await asyncio.wait_for(asyncio.to_thread(self._renew_sync, idx), timeout=timeout)
+            self._logger.debug("Renew result for index=%s -> %s", str(idx), result)
             return bool(result)
         except Exception:
+            try:
+                self._logger.exception("Renew failed or timed out for index=%s", str(idx))
+            except Exception:
+                pass
             return False
 
     def get_socks_port(self, idx: int) -> int:
