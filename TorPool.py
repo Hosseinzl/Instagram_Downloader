@@ -21,7 +21,8 @@ class TorPool:
         self._lock = asyncio.Lock()
         # logger
         self._logger = logging.getLogger(__name__)
-        self._logger.info("TorPool initialized: count=%d socks=%s control=%s", self.count, self.socks_ports,)
+        # include control_ports in the logged arguments (previously omitted which caused a formatting error)
+        self._logger.info("TorPool initialized: count=%d socks=%s control=%s", self.count, self.socks_ports, self.control_ports)
 
     async def get_next_index(self) -> int:
         async with self._lock:
