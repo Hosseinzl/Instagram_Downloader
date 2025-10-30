@@ -1,5 +1,5 @@
 # Use Playwright base image which includes browsers and required dependencies
-FROM mcr.microsoft.com/playwright/python:latest
+FROM mcr.microsoft.com/playwright/python:v1.55.0-jammy
 
 # Create app directory
 WORKDIR /app
