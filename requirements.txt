@@ -3,3 +3,6 @@ beautifulsoup4
 playwright
 playwright-stealth
 stem
+fastapi
+uvicorn[standard]
+pydantic

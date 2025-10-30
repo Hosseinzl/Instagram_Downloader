@@ -4,6 +4,7 @@ import requests
 import json
 import re
 import time
+import sys
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -28,33 +29,25 @@ def sleep(ms):
 
 async def alter1reels(url=""):
     async with async_playwright() as p:
-
-        # linux
-        browser = await p.chromium.launch(
-            headless=True,
-            executable_path="/snap/bin/chromium",  # Adjust if needed
-            args=["--no-sandbox", "--proxy-server=socks://127.0.0.1:9050"]
-        )
-
-        # windows
         # pick a socks port from the tor pool for this browser instance
         try:
             proxies, idx = await tor_pool.get_next_proxies()
             # proxies are like 'socks5h://127.0.0.1:9050'
-            socks_url = proxies.get("http", "socks5h://127.0.0.1:9050")
+            socks_url = proxies.get("http", proxies.get("https", "socks5h://127.0.0.1:9050"))
             socks_port = socks_url.split(":")[-1]
-            # log which tor instance we selected for this browser session
-            try:
-                logger.info("alter1reels: using tor index=%s socks_port=%s", idx, socks_port)
-            except Exception:
-                pass
         except Exception:
+            idx = None
             socks_port = "9050"
 
-        # browser = await p.chromium.launch(
-        #     headless=True,
-        #     args=["--no-sandbox", f"--proxy-server=socks://127.0.0.1:{socks_port}"]
-        # )
+        # log which tor instance we selected for this browser session
+        try:
+            logger.info("alter1reels: using tor index=%s socks_port=%s", idx, socks_port)
+        except Exception:
+            pass
+
+        # Launch Playwright browser with the selected SOCKS proxy
+        browser_args = ["--no-sandbox", f"--proxy-server=socks://127.0.0.1:{socks_port}"]
+        browser = await p.chromium.launch(headless=True, args=browser_args)
 
         page = await browser.new_page()
         # apply Playwright stealth evasions to the created page

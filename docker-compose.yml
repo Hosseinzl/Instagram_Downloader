@@ -4,9 +4,13 @@ services:
   app:
     build: .
     container_name: insta-tor-app
+    ports:
+      - "4200:4200"
     volumes:
       - ./:/app
       - ./tor_instances:/app/tor_instances
     environment:
       - PYTHONUNBUFFERED=1
+      - PORT=4200
+    command: ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "4200", "--log-level", "info"]
     restart: unless-stopped

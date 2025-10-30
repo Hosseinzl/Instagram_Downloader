@@ -14,5 +14,10 @@ COPY . /app
 # Expose a volume for tor instances if you plan to run them on the host
 VOLUME ["/app/tor_instances"]
 
-# Default command: run the test runner main script (adjust if you use a different entrypoint)
-CMD ["python", "main.py"]
+# Expose API port used by uvicorn
+EXPOSE 4200
+ENV PORT=4200
+
+# Default command: run the FastAPI app with uvicorn on port 4200
+# This will start `api_server:app` (make sure api_server.py is present)
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "4200", "--log-level", "info"]
