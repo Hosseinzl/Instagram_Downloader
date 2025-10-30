@@ -40,7 +40,8 @@ class TorPool:
         }
         # log the proxy selection
         try:
-            self._logger.debug("Selected tor index=%d socks_port=%d", idx, port)
+            # Log at INFO so it's visible in normal runs
+            self._logger.info("Selected tor index=%d socks_port=%d", idx, port)
         except Exception:
             pass
         return proxies, idx

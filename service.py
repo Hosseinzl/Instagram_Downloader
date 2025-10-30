@@ -43,6 +43,11 @@ async def alter1reels(url=""):
             # proxies are like 'socks5h://127.0.0.1:9050'
             socks_url = proxies.get("http", "socks5h://127.0.0.1:9050")
             socks_port = socks_url.split(":")[-1]
+            # log which tor instance we selected for this browser session
+            try:
+                logger.info("alter1reels: using tor index=%s socks_port=%s", idx, socks_port)
+            except Exception:
+                pass
         except Exception:
             socks_port = "9050"
 
@@ -290,6 +295,13 @@ async def download(url="", trys=1):
         # obtain proxies for this request from the tor pool
         try:
             proxies, idx = await tor_pool.get_next_proxies()
+            # log which tor instance is used for this request
+            try:
+                socks_url = proxies.get("http") or proxies.get("https")
+                socks_port = socks_url.split(":")[-1] if socks_url else "?"
+                logger.info("Request: url=%s tor_index=%s socks_port=%s", furl, idx, socks_port)
+            except Exception:
+                pass
         except Exception:
             proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
 
