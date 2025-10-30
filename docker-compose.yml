@@ -4,6 +4,7 @@ services:
   app:
     build: .
     container_name: insta-tor-app
+    network_mode: "host"     # 👈 اضافه کن
     ports:
       - "4200:4200"
     volumes:
