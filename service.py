@@ -106,12 +106,12 @@ async def alter1reels(url=""):
 
             await page.close()
             await browser.close()
-            return result["resolved"]
+            return result["resolved"], None, (idx if 'idx' in locals() else None)
         except Exception as err:
             print(f"instagram (alter1reels): {err}")
             await page.close()
             await browser.close()
-            return None
+            return None, None, None
 
 def default_headers():
     return {
@@ -229,10 +229,10 @@ def download2(short_code=""):
         _log_request_start(f"https://www.instagram.com/p/{short_code}/?direct=true", idx)
         response = requests.get(f"https://www.instagram.com/p/{short_code}/?direct=true", headers=default_headers(), proxies=proxies, timeout=30)
         response.raise_for_status()
-        return parse_post(response.text)
+        return parse_post(response.text), response.status_code, (idx if 'idx' in locals() else None)
     except Exception as err:
         logger.exception("download2 failed for shortcode=%s (tor_index=%s): %s", short_code, locals().get('idx'), err)
-        return None
+        return None, None, None
 
 # tor_renew function is not defined in the original code, so implementing a stub
 # You may need to implement TOR renewal logic if required
@@ -303,6 +303,8 @@ async def download(url="", trys=1):
         response.raise_for_status()
         data = response.text
 
+        # (caller will be responsible for logging the request data)
+
         # Regex to find contextJSON
         regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
         match = re.search(regex, data)
@@ -366,7 +368,7 @@ async def download(url="", trys=1):
                     "comments": comments_count,
                     "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo"
                 }
-            return data_dict, status_code
+            return data_dict, status_code, (idx if 'idx' in locals() else None)
         else:
             # Fallback HTML parsing
             soup = BeautifulSoup(data, "html.parser")
@@ -388,7 +390,7 @@ async def download(url="", trys=1):
                 "likes": 0,
                 "comments": 0,
                 "type": "photo"
-            }, status_code
+            }, status_code, (idx if 'idx' in locals() else None)
     except Exception as err:
         print(f"instagram (try {trys}): {err}")
         # When an error happens, attempt to renew the Tor circuit used for this request
@@ -403,14 +405,16 @@ async def download(url="", trys=1):
         if trys >= 3:
             print(f"Attempting alter1reels (try {trys})...")
             result = await alter1reels(url)
-            if result:
-                return result, None  # No status code from alter1reels
+            # alter1reels now returns (result, status_code, idx)
+            if result and result[0]:
+                return result
         elif trys == 2:
             print(f"Attempting download2 (try {trys})...")
             shortcode = url.split("/")[-2] if "/p/" in url or "/reel/" in url else ""
             result = download2(shortcode)
-            if result:
-                return result, None  # No status code from download2
+            # download2 returns (result, status_code, idx)
+            if result and result[0]:
+                return result
 
         print(f"Retrying with TOR renewal (try {trys + 1})...")
         # Pass the index of the tor instance used for the failing request when available
@@ -418,4 +422,4 @@ async def download(url="", trys=1):
         return await download(url, trys + 1)
         
     print("All retry attempts failed.")
-    return None, None
+    return None, None, None

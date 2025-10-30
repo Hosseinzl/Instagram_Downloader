@@ -16,11 +16,11 @@ async def main():
         print(f"Attempt {attempt}/{max_attempts}: Requesting URL...")
         try:
             # Call the download function
-            result, status_code = await download(url)
+            result, status_code, tor_index = await download(url)
             
             if result:
                 success_count += 1
-                print(f"Success {success_count}: Post Code: {result['code']}, Type: {result['type']}, Status Code: {status_code}")
+                print(f"Success {success_count}: Post Code: {result['code']}, Type: {result['type']}, Status Code: {status_code}, TorIndex: {tor_index}")
                 # print(f"  Caption: {result['caption'][:50]}...")  # Truncate for brevity
                 # print(f"  Images: {result['images']}")
                 print(f"  Video: {result['video']}")
