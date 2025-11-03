@@ -1,17 +1,15 @@
 version: '3.8'
 
 services:
-  app:
+  insta-tor-app:
     build: .
     container_name: insta-tor-app
     network_mode: "host"
-    ports:
-      - "4200:4200"
-    volumes:
-      - ./:/app
-      - ./tor_instances:/app/tor_instances
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=4200
-    command: ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "4200", "--log-level", "info"]
+    volumes:
+      - ./:/app
+      - ./tor_instances:/app/tor_instances
+      - ./tor_logs:/app/tor_logs
     restart: unless-stopped

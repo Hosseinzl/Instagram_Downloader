@@ -1,33 +1,27 @@
-# از ایمیج Playwright با پایتون
+# Base image with Playwright + Python
 FROM mcr.microsoft.com/playwright/python:v1.55.0-jammy
 
-# نصب tor
+# Install tor
 RUN apt-get update && apt-get install -y tor && apt-get clean
 
-# مسیر کاری
+# Working directory
 WORKDIR /app
 
-# کپی نیازمندی‌های پایتون
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Copy dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-# کپی سورس پروژه
+# Copy project files
 COPY . /app
 
-# ساخت فولدر برای tor instances
-RUN mkdir -p /app/tor_instances/tor1 /app/tor_instances/tor2 /app/tor_instances/tor3 /app/tor_instances/tor4 \
-    && mkdir -p /app/tor_logs
+# Prepare folders
+RUN mkdir -p /app/tor_instances /app/tor_logs
 
-# اضافه کردن فایل‌های کانفیگ
-COPY tor-configs /app/tor-configs
-
-# پورت‌های مورد نیاز
+# Expose ports (uvicorn + tor)
 EXPOSE 4200 9050-9057
 
-# استارت اپ (اول tor ها، بعد uvicorn)
-CMD bash -c "\
-tor -f /app/tor-configs/tor1.conf & \
-tor -f /app/tor-configs/tor2.conf & \
-tor -f /app/tor-configs/tor3.conf & \
-tor -f /app/tor-configs/tor4.conf & \
-uvicorn api_server:app --host 0.0.0.0 --port 4200 --log-level info"
+# Start script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
