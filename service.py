@@ -401,7 +401,7 @@ async def download(url="", trys=1):
             pass
 
     # Retry logic
-    if trys <= 8:
+    if trys <= 3:
         if trys >= 3:
             print(f"Attempting alter1reels (try {trys})...")
             result = await alter1reels(url)
