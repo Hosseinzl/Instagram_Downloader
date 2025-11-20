@@ -308,6 +308,7 @@ async def download(url="", trys=1):
         # Regex to find contextJSON
         regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
         match = re.search(regex, data)
+        print(data)
         if match:
             raw_json = match.group(1)
             raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
@@ -349,7 +350,7 @@ async def download(url="", trys=1):
                     "id": id_,
                     "images": [],
                     "video": video_url,
-                    "type": "GraphSidecar",
+                    "mode": "GraphSidecar",
                     "carousel": carousel,
                     "caption": caption,
                     "likes": likes_count,
@@ -364,7 +365,7 @@ async def download(url="", trys=1):
                     "images": [],
                     "video": video_url,
                     "carousel": carousel,
-                    "type": "NonGraphSidecar",
+                    "mode": "NonGraphSidecar",
                     "caption": caption,
                     "likes": likes_count,
                     "comments": comments_count,
