@@ -308,7 +308,6 @@ async def download(url="", trys=1):
         # Regex to find contextJSON
         regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
         match = re.search(regex, data)
-        print(data)
         if match:
             raw_json = match.group(1)
             raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
