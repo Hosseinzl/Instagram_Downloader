@@ -322,6 +322,16 @@ async def download(url="", trys=1):
             comments_count = media.get("comments_count", 0)
             edge_media_to_caption = media.get("edge_media_to_caption")
 
+            owner = media["owner"]
+
+            # Remove unwanted owner fields
+            UNWANTED_OWNER_FIELDS = [
+                "edge_owner_to_timeline_media",
+                "edge_owner_to_timeline_video_media"
+            ]
+            for field in UNWANTED_OWNER_FIELDS:
+                owner.pop(field, None)
+
             caption = ""
             if edge_media_to_caption:
                 edges = edge_media_to_caption.get("edges", [])
@@ -354,7 +364,8 @@ async def download(url="", trys=1):
                     "caption": caption,
                     "likes": likes_count,
                     "comments": comments_count,
-                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo"
+                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
+                    "owner": owner
                 }
             else:
                 data_dict = {
@@ -368,7 +379,8 @@ async def download(url="", trys=1):
                     "caption": caption,
                     "likes": likes_count,
                     "comments": comments_count,
-                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo"
+                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
+                    "owner": owner
                 }
             return data_dict, status_code, (idx if 'idx' in locals() else None)
         else:
