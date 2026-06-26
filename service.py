@@ -305,106 +305,116 @@ async def download(url="", trys=1):
 
         # (caller will be responsible for logging the request data)
 
-        # Regex to find contextJSON
-        regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
+        # Regex to find contextJSON - Updated to capture raw escaped string safely
+        regex = r'"contextJSON"\s*:\s*("(?:(?:\\.)|[^"\\])*")'
         match = re.search(regex, data)
+
         if match:
-            raw_json = match.group(1)
-            raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
-            parsed = json.loads(raw_json)
-            media = parsed["context"]["media"]
-            id_ = media["id"]
-            shortcode = media["shortcode"]
-            typename = media["__typename"]
-            edge_sidecar_to_children = media.get("edge_sidecar_to_children", {}).get("edges", [])
-            video_url = media.get("video_url")
-            likes_count = media.get("likes_count", 0)
-            comments_count = media.get("comments_count", 0)
-            edge_media_to_caption = media.get("edge_media_to_caption")
+            encoded_context_json = match.group(1)
+            
+            # 1. Decode escaped JSON string
+            context_json_text = json.loads(encoded_context_json)
+            # 2. Parse the actual JSON object
+            parsed = json.loads(context_json_text)
+            
+            # --- Updated paths for the new Instagram structure ---
+            media = parsed.get("gql_data", {}).get("shortcode_media")
+            
+            if media:
+                id_ = media.get("id")
+                shortcode = media.get("shortcode")
+                typename = media.get("__typename")
+                edge_sidecar_to_children = media.get("edge_sidecar_to_children", {}).get("edges", [])
+                video_url = media.get("video_url")
+                
+                # Updated likes and comments structure
+                likes_count = media.get("edge_liked_by", {}).get("count", 0)
+                comments_count = media.get("edge_media_to_comment", {}).get("count", 0)
+                edge_media_to_caption = media.get("edge_media_to_caption")
 
-            owner = media["owner"]
+                owner = media.get("owner", {})
 
-            # Remove unwanted owner fields
-            UNWANTED_OWNER_FIELDS = [
-                "edge_owner_to_timeline_media",
-                "edge_owner_to_timeline_video_media"
-            ]
-            for field in UNWANTED_OWNER_FIELDS:
-                owner.pop(field, None)
+                # Remove unwanted owner fields
+                UNWANTED_OWNER_FIELDS = [
+                    "edge_owner_to_timeline_media",
+                    "edge_owner_to_timeline_video_media"
+                ]
+                for field in UNWANTED_OWNER_FIELDS:
+                    owner.pop(field, None)
 
-            caption = ""
-            if edge_media_to_caption:
-                edges = edge_media_to_caption.get("edges", [])
-                if edges:
-                    caption = decode_unicode(edges[0]["node"]["text"].strip())
+                caption = ""
+                if edge_media_to_caption:
+                    edges = edge_media_to_caption.get("edges", [])
+                    if edges:
+                        caption = decode_unicode(edges[0]["node"]["text"].strip())
 
-            carousel = []
-            for e in edge_sidecar_to_children:
-                node = e["node"]
-                is_video = node.get("is_video", False)
-                video_url_car = node.get("video_url")
-                display_url = node.get("display_url")
-                display_resources = node.get("display_resources", [])
-                if is_video:
-                    carousel.append(video_url_car)
+                carousel = []
+                for e in edge_sidecar_to_children:
+                    node = e["node"]
+                    is_video = node.get("is_video", False)
+                    video_url_car = node.get("video_url")
+                    display_resources = node.get("display_resources", [])
+                    if is_video:
+                        carousel.append(video_url_car)
+                    else:
+                        if display_resources:
+                            reso = display_resources[-1]["src"]
+                            carousel.append(reso)
+
+                if typename == "GraphSidecar":
+                    data_dict = {
+                        "code": shortcode,
+                        "pk": id_,
+                        "id": id_,
+                        "images": [],
+                        "video": video_url,
+                        "mode": "GraphSidecar",
+                        "carousel": carousel,
+                        "caption": caption,
+                        "likes": likes_count,
+                        "comments": comments_count,
+                        "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
+                        "owner": owner
+                    }
                 else:
-                    if display_resources:
-                        reso = display_resources[-1]["src"]
-                        carousel.append(reso)
+                    data_dict = {
+                        "code": shortcode,
+                        "pk": id_,
+                        "id": id_,
+                        "images": [],
+                        "video": video_url,
+                        "carousel": carousel,
+                        "mode": "NonGraphSidecar",
+                        "caption": caption,
+                        "likes": likes_count,
+                        "comments": comments_count,
+                        "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
+                        "owner": owner
+                    }
+                return data_dict, status_code, (idx if 'idx' in locals() else None)
 
-            if typename == "GraphSidecar":
-                data_dict = {
-                    "code": shortcode,
-                    "pk": id_,
-                    "id": id_,
-                    "images": [],
-                    "video": video_url,
-                    "mode": "GraphSidecar",
-                    "carousel": carousel,
-                    "caption": caption,
-                    "likes": likes_count,
-                    "comments": comments_count,
-                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
-                    "owner": owner
-                }
-            else:
-                data_dict = {
-                    "code": shortcode,
-                    "pk": id_,
-                    "id": id_,
-                    "images": [],
-                    "video": video_url,
-                    "carousel": carousel,
-                    "mode": "NonGraphSidecar",
-                    "caption": caption,
-                    "likes": likes_count,
-                    "comments": comments_count,
-                    "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
-                    "owner": owner
-                }
-            return data_dict, status_code, (idx if 'idx' in locals() else None)
-        else:
-            # Fallback HTML parsing
-            soup = BeautifulSoup(data, "html.parser")
-            image_element = soup.select_one(".EmbeddedMedia img")
-            image = image_element["src"] if image_element else None
-            caption = ""
-            try:
-                caption_element = soup.select_one(".Caption")
-                if caption_element:
-                    caption_element.select_one(".CaptionUsername").decompose()
-                    caption = caption_element.get_text(strip=True).replace("&#064;", "#")
-            except Exception as err:
-                print(err)
-            return {
-                "images": [image] if image else [],
-                "video": None,
-                "carousel": [],
-                "caption": caption,
-                "likes": 0,
-                "comments": 0,
-                "type": "photo"
-            }, status_code, (idx if 'idx' in locals() else None)
+        # Fallback HTML parsing (Executes if match fails OR if media object is not found)
+        soup = BeautifulSoup(data, "html.parser")
+        image_element = soup.select_one(".EmbeddedMedia img")
+        image = image_element["src"] if image_element else None
+        caption = ""
+        try:
+            caption_element = soup.select_one(".Caption")
+            if caption_element:
+                caption_element.select_one(".CaptionUsername").decompose()
+                caption = caption_element.get_text(strip=True).replace("&#064;", "#")
+        except Exception as err:
+            print(err)
+        return {
+            "images": [image] if image else [],
+            "video": None,
+            "carousel": [],
+            "caption": caption,
+            "likes": 0,
+            "comments": 0,
+            "type": "photo"
+        }, status_code, (idx if 'idx' in locals() else None)
+
     except Exception as err:
         print(f"instagram (try {trys}): {err}")
         # When an error happens, attempt to renew the Tor circuit used for this request
