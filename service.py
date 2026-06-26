@@ -283,12 +283,10 @@ async def download(url="", trys=1):
         "Accept-Encoding": "gzip"
     }
 
-    status_code = None  # Initialize status code
+    status_code = None
     try:
-        # obtain proxies for this request from the tor pool
         try:
             proxies, idx = await tor_pool.get_next_proxies()
-            # log which tor instance is used for this request
             try:
                 socks_url = proxies.get("http") or proxies.get("https")
                 socks_port = socks_url.split(":")[-1] if socks_url else "?"
@@ -299,127 +297,115 @@ async def download(url="", trys=1):
             proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
 
         response = requests.get(furl, headers=headers, proxies=proxies, timeout=30)
-        status_code = response.status_code  # Capture status code
+        status_code = response.status_code
         response.raise_for_status()
         data = response.text
 
-        # (caller will be responsible for logging the request data)
-
-        # Regex to find contextJSON - Updated to capture raw escaped string safely
-        regex = r'"contextJSON"\s*:\s*("(?:(?:\\.)|[^"\\])*")'
+        regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
         match = re.search(regex, data)
 
         if match:
-            encoded_context_json = match.group(1)
+            raw_json = match.group(1)
+            raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
+            parsed = json.loads(raw_json)
             
-            # 1. Decode escaped JSON string
-            context_json_text = json.loads(encoded_context_json)
-            # 2. Parse the actual JSON object
-            parsed = json.loads(context_json_text)
+            # استفاده از ساختار جدید gql_data
+            media = parsed.get("gql_data", {}).get("shortcode_media", {})
             
-            # --- Updated paths for the new Instagram structure ---
-            media = parsed.get("gql_data", {}).get("shortcode_media")
+            id_ = media.get("id")
+            shortcode = media.get("shortcode")
+            typename = media.get("__typename")
             
-            if media:
-                id_ = media.get("id")
-                shortcode = media.get("shortcode")
-                typename = media.get("__typename")
-                edge_sidecar_to_children = media.get("edge_sidecar_to_children", {}).get("edges", [])
-                video_url = media.get("video_url")
-                
-                # Updated likes and comments structure
-                likes_count = media.get("edge_liked_by", {}).get("count", 0)
-                comments_count = media.get("edge_media_to_comment", {}).get("count", 0)
-                edge_media_to_caption = media.get("edge_media_to_caption")
+            # استخراج مقادیر جدید
+            video_url = media.get("video_url")
+            likes_count = media.get("edge_liked_by", {}).get("count", 0)
+            comments_count = media.get("edge_media_to_comment", {}).get("count", 0)
+            edge_media_to_caption = media.get("edge_media_to_caption", {})
+            owner = media.get("owner", {})
 
-                owner = media.get("owner", {})
+            # حذف فیلدهای ناخواسته از owner (در صورت وجود)
+            UNWANTED_OWNER_FIELDS = [
+                "edge_owner_to_timeline_media",
+                "edge_owner_to_timeline_video_media"
+            ]
+            for field in UNWANTED_OWNER_FIELDS:
+                owner.pop(field, None)
 
-                # Remove unwanted owner fields
-                UNWANTED_OWNER_FIELDS = [
-                    "edge_owner_to_timeline_media",
-                    "edge_owner_to_timeline_video_media"
-                ]
-                for field in UNWANTED_OWNER_FIELDS:
-                    owner.pop(field, None)
+            # استخراج کپشن
+            caption = ""
+            edges = edge_media_to_caption.get("edges", [])
+            if edges:
+                try:
+                    # فرض بر این است که decode_unicode قبلا در فایل شما تعریف شده
+                    caption = decode_unicode(edges[0]["node"]["text"].strip())
+                except NameError:
+                    caption = edges[0]["node"]["text"].strip()
 
-                caption = ""
-                if edge_media_to_caption:
-                    edges = edge_media_to_caption.get("edges", [])
-                    if edges:
-                        caption = decode_unicode(edges[0]["node"]["text"].strip())
-
-                carousel = []
+            # بررسی اسلایدر (در صورت وجود در ساختار جدید)
+            edge_sidecar_to_children = media.get("edge_sidecar_to_children", {}).get("edges", [])
+            carousel = []
+            if edge_sidecar_to_children:
                 for e in edge_sidecar_to_children:
                     node = e["node"]
                     is_video = node.get("is_video", False)
-                    video_url_car = node.get("video_url")
-                    display_resources = node.get("display_resources", [])
                     if is_video:
-                        carousel.append(video_url_car)
+                        carousel.append(node.get("video_url"))
                     else:
+                        display_resources = node.get("display_resources", [])
                         if display_resources:
-                            reso = display_resources[-1]["src"]
-                            carousel.append(reso)
+                            carousel.append(display_resources[-1]["src"])
+            elif media.get("display_url") and not video_url:
+                # اگر اسلایدر نبود و ویدیو هم نبود، عکس اصلی را اضافه کن
+                carousel.append(media.get("display_url"))
 
-                if typename == "GraphSidecar":
-                    data_dict = {
-                        "code": shortcode,
-                        "pk": id_,
-                        "id": id_,
-                        "images": [],
-                        "video": video_url,
-                        "mode": "GraphSidecar",
-                        "carousel": carousel,
-                        "caption": caption,
-                        "likes": likes_count,
-                        "comments": comments_count,
-                        "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
-                        "owner": owner
-                    }
-                else:
-                    data_dict = {
-                        "code": shortcode,
-                        "pk": id_,
-                        "id": id_,
-                        "images": [],
-                        "video": video_url,
-                        "carousel": carousel,
-                        "mode": "NonGraphSidecar",
-                        "caption": caption,
-                        "likes": likes_count,
-                        "comments": comments_count,
-                        "type": "carousel" if typename == "GraphSidecar" else "video" if typename == "GraphVideo" else "photo",
-                        "owner": owner
-                    }
-                return data_dict, status_code, (idx if 'idx' in locals() else None)
+            # تعیین نوع پست
+            if typename == "GraphSidecar":
+                post_type = "carousel"
+            elif typename == "GraphVideo" or media.get("is_video"):
+                post_type = "video"
+            else:
+                post_type = "photo"
 
-        # Fallback HTML parsing (Executes if match fails OR if media object is not found)
-        soup = BeautifulSoup(data, "html.parser")
-        image_element = soup.select_one(".EmbeddedMedia img")
-        image = image_element["src"] if image_element else None
-        caption = ""
-        try:
-            caption_element = soup.select_one(".Caption")
-            if caption_element:
-                caption_element.select_one(".CaptionUsername").decompose()
-                caption = caption_element.get_text(strip=True).replace("&#064;", "#")
-        except Exception as err:
-            print(err)
-        return {
-            "images": [image] if image else [],
-            "video": None,
-            "carousel": [],
-            "caption": caption,
-            "likes": 0,
-            "comments": 0,
-            "type": "photo"
-        }, status_code, (idx if 'idx' in locals() else None)
-
+            data_dict = {
+                "code": shortcode,
+                "pk": id_,
+                "id": id_,
+                "images": [media.get("display_url")] if media.get("display_url") else [],
+                "video": video_url,
+                "mode": typename,
+                "carousel": carousel,
+                "caption": caption,
+                "likes": likes_count,
+                "comments": comments_count,
+                "type": post_type,
+                "owner": owner
+            }
+            return data_dict, status_code, (idx if 'idx' in locals() else None)
+        else:
+            # Fallback HTML parsing
+            soup = BeautifulSoup(data, "html.parser")
+            image_element = soup.select_one(".EmbeddedMedia img")
+            image = image_element["src"] if image_element else None
+            caption = ""
+            try:
+                caption_element = soup.select_one(".Caption")
+                if caption_element:
+                    caption_element.select_one(".CaptionUsername").decompose()
+                    caption = caption_element.get_text(strip=True).replace("&#064;", "#")
+            except Exception as err:
+                print(err)
+            return {
+                "images": [image] if image else [],
+                "video": None,
+                "carousel": [],
+                "caption": caption,
+                "likes": 0,
+                "comments": 0,
+                "type": "photo"
+            }, status_code, (idx if 'idx' in locals() else None)
     except Exception as err:
         print(f"instagram (try {trys}): {err}")
-        # When an error happens, attempt to renew the Tor circuit used for this request
         try:
-            # if we have idx from above, renew that index; otherwise, just trigger a general renew
             await tor_pool.renew(idx if 'idx' in locals() else None)
         except Exception:
             pass
@@ -429,20 +415,21 @@ async def download(url="", trys=1):
         if trys >= 3:
             print(f"Attempting alter1reels (try {trys})...")
             result = await alter1reels(url)
-            # alter1reels now returns (result, status_code, idx)
             if result and result[0]:
                 return result
         elif trys == 2:
             print(f"Attempting download2 (try {trys})...")
             shortcode = url.split("/")[-2] if "/p/" in url or "/reel/" in url else ""
             result = download2(shortcode)
-            # download2 returns (result, status_code, idx)
             if result and result[0]:
                 return result
 
         print(f"Retrying with TOR renewal (try {trys + 1})...")
-        # Pass the index of the tor instance used for the failing request when available
-        tor_renew(idx if 'idx' in locals() else None)
+        try:
+            tor_renew(idx if 'idx' in locals() else None)
+        except Exception:
+            pass
+            
         return await download(url, trys + 1)
         
     print("All retry attempts failed.")
