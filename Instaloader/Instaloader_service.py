@@ -4,9 +4,6 @@ from TorPool import get_tor_pool
 import instaloader
 from instaloader import Post
 from urllib.parse import urlparse
-import traceback
-
-# from tor_service import get_tor_pool
 
 USE_PROXY = True
 
@@ -42,7 +39,6 @@ async def extract_instagram_data(url: str):
     post = None
     idx = None
     
-    # Loop for maximum 2 attempts (1 initial + 1 retry)
     for attempt in range(2):
         if USE_PROXY:
             proxies, idx = await tor_pool.get_next_proxies()
@@ -53,20 +49,16 @@ async def extract_instagram_data(url: str):
             post = await asyncio.to_thread(_fetch_post_sync, shortcode)
             break  # Break out of the loop if successful
             
-        except instaloader.exceptions.PostNotFoundException as e:
-            logging.error(f"Post not found {shortcode}: {e}")
-            return None, 404, idx
         except Exception as e:
             logging.error(f"Error fetching {shortcode} on attempt {attempt + 1}: {e}")
             if USE_PROXY:
-                # Renew the failed Tor instance
                 await tor_pool.renew(idx)
             
-            # If this was the last attempt, return a 500 Internal Server Error
             if attempt == 1:
+                if isinstance(e, instaloader.exceptions.PostNotFoundException):
+                    return None, 404, idx
                 return None, 500, idx
 
-    # If post is somehow still None but no exception was raised (safeguard)
     if not post:
         return None, 500, idx
 
