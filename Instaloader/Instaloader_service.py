@@ -52,8 +52,18 @@ async def extract_instagram_data(url: str):
             local_L.context._session.proxies.update(proxies)
             logging.info(f"Attempt {attempt + 1}: Using proxy {proxies} (Tor index: {idx}) for {shortcode}")
 
+            try:
+                    # استفاده از همان سشن برای گرفتن IP
+                    ip_check = await asyncio.to_thread(
+                        local_L.context._session.get, 
+                        "https://api.ipify.org?format=json", 
+                        timeout=5
+                    )
+                    logging.info(f"Tor Exit IP for index {idx}: {ip_check.json()['ip']}")
+                except Exception as e:
+                    logging.warning(f"Could not fetch IP for index {idx}: {e}")
+
         try:
-            # ارسال local_L.context به تابع
             post = await asyncio.to_thread(Post.from_shortcode, local_L.context, shortcode)
             break
             
