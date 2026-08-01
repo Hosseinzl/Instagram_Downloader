@@ -4,7 +4,7 @@ from pydantic import BaseModel, HttpUrl
 import asyncio
 import uvicorn
 from typing import Optional
-from service import download
+from direct_http.service import download
 from sqlite_db import init_db, async_log_request
 from Instaloader.Instaloader_service import extract_instagram_data 
 
