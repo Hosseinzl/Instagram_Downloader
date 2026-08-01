@@ -5,6 +5,9 @@ from typing import Tuple, Dict, Optional
 from stem.control import Controller
 
 
+logging.getLogger("stem").setLevel(logging.WARNING)
+logging.getLogger("instaloader").setLevel(logging.WARNING)
+
 
 class TorPool:
     """Manage a small pool of Tor instances (socks + control ports).
@@ -21,8 +24,8 @@ class TorPool:
         self._lock = asyncio.Lock()
         # logger
         self._logger = logging.getLogger(__name__)
-        # include control_ports in the logged arguments (previously omitted which caused a formatting error)
         self._logger.info("TorPool initialized: count=%d socks=%s control=%s", self.count, self.socks_ports, self.control_ports)
+
 
     async def get_next_index(self) -> int:
         async with self._lock:
@@ -62,9 +65,10 @@ class TorPool:
                 c.signal("NEWNYM")
             self._logger.info("NEWNYM signalled successfully for index=%d", idx)
             return True
-        except Exception:
+        except Exception as e:
             try:
-                self._logger.exception("Failed to send NEWNYM to control port %d (index=%d)", control_port, idx)
+                self._logger.warning("Failed to send NEWNYM to control port %d (index=%d) - Error: %s", control_port, idx, str(e))            except Exception:
+                pass
             except Exception:
                 pass
             return False
@@ -84,9 +88,9 @@ class TorPool:
             result = await asyncio.wait_for(asyncio.to_thread(self._renew_sync, idx), timeout=timeout)
             self._logger.debug("Renew result for index=%s -> %s", str(idx), result)
             return bool(result)
-        except Exception:
+        except Exception as e:
             try:
-                self._logger.exception("Renew failed or timed out for index=%s", str(idx))
+                self._logger.warning("Renew failed or timed out for index=%s - Error: %s", str(idx), str(e))
             except Exception:
                 pass
             return False

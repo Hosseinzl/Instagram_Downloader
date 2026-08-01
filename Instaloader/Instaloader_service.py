@@ -40,14 +40,22 @@ async def extract_instagram_data(url: str):
     idx = None
     
     for attempt in range(2):
+        local_L = instaloader.Instaloader(
+            download_pictures=False,
+            download_videos=False,
+            save_metadata=False,
+            download_comments=False,
+        )
+        
         if USE_PROXY:
             proxies, idx = await tor_pool.get_next_proxies()
-            L.context._session.proxies.update(proxies)
+            local_L.context._session.proxies.update(proxies)
             logging.info(f"Attempt {attempt + 1}: Using proxy {proxies} (Tor index: {idx}) for {shortcode}")
 
         try:
-            post = await asyncio.to_thread(_fetch_post_sync, shortcode)
-            break  # Break out of the loop if successful
+            # ارسال local_L.context به تابع
+            post = await asyncio.to_thread(Post.from_shortcode, local_L.context, shortcode)
+            break
             
         except Exception as e:
             logging.error(f"Error fetching {shortcode} on attempt {attempt + 1}: {e}")
