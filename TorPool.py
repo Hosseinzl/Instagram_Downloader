@@ -67,7 +67,7 @@ class TorPool:
             return True
         except Exception as e:
             try:
-                self._logger.warning("Failed to send NEWNYM to control port %d (index=%d) - Error: %s", control_port, idx, str(e))            except Exception:
+                self._logger.warning("Failed to send NEWNYM to control port %d (index=%d) - Error: %s", control_port, idx, str(e))
                 pass
             except Exception:
                 pass
