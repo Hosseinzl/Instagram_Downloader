@@ -60,8 +60,8 @@ async def extract_instagram_data(url: str):
                         timeout=5
                     )
                     logging.info(f"Tor Exit IP for index {idx}: {ip_check.json()['ip']}")
-                except Exception as e:
-                    logging.warning(f"Could not fetch IP for index {idx}: {e}")
+            except Exception as e:
+                logging.warning(f"Could not fetch IP for index {idx}: {e}")
 
         try:
             post = await asyncio.to_thread(Post.from_shortcode, local_L.context, shortcode)
