@@ -6,7 +6,7 @@ import uvicorn
 from typing import Optional
 from direct_http.service import download
 from sqlite_db import init_db, async_log_request
-from Instaloader.Instaloader_service import extract_instagram_data 
+from direct_http.service import download 
 
 app = FastAPI(title="Local Tor Downloader API", version="0.1")
 
@@ -27,7 +27,7 @@ async def post_download(req: DownloadRequest):
     url = str(req.url)
     try:
         # call the existing async download function which now returns (result, status_code, tor_index)
-        result, status, tor_index = await extract_instagram_data(url)
+        result, status, tor_index = await download(url)
         # log the request outcome to sqlite (do not fail the request if logging fails)
         try:
             await async_log_request(url, tor_index, status)
@@ -45,7 +45,7 @@ async def post_download(req: DownloadRequest):
 @app.get("/download")
 async def get_download(url: str):
     try:
-        result, status, tor_index = await extract_instagram_data(url)
+        result, status, tor_index = await download(url)
         try:
             await async_log_request(url, tor_index, status)
         except Exception:
