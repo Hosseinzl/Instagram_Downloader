@@ -1,5 +1,5 @@
 # Base image with Playwright + Python
-FROM mcr.microsoft.com/playwright/python:v1.55.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.64.1-jammy
 
 # Install tor
 RUN apt-get update && apt-get install -y tor && apt-get clean
