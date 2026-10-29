@@ -56,13 +56,24 @@ def extract_shortcode(url: str) -> Optional[str]:
 
 
 def clean_caption(raw_text: str) -> str:
+    """
+    Safely handles Persian/Arabic/UTF-8 captions and automatically
+    repairs any Latin-1 / Windows-1252 Mojibake corruption.
+    """
     if not raw_text:
         return ""
-    try:
-        return raw_text.encode("utf-8").decode("unicode_escape").strip()
-    except Exception:
-        return raw_text.strip()
 
+    text = str(raw_text).strip()
+
+    # If the text was accidentally read as Latin-1/ISO-8859-1 (Mojibake), repair it:
+    try:
+        fixed = text.encode("latin-1").decode("utf-8")
+        return fixed.strip()
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # Already valid UTF-8 (Persian characters cannot be encoded in latin-1)
+        pass
+
+    return text
 
 def extract_context_json(html_text: str) -> Optional[Dict[str, Any]]:
     """Extracts contextJSON whether encoded as a JSON string or raw nested object."""
