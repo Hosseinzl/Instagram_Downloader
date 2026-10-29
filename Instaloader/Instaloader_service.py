@@ -170,7 +170,7 @@ async def fetch_instaloader_stage(shortcode: str, proxies: dict) -> Tuple[Option
     except instaloader.exceptions.QueryReturnedBadRequestException:
         logger.warning(f"Instaloader 400 Bad Request / 429 Rate Limited on {shortcode}")
         return None, 429
-    except instaloader.exceptions.PostNotFoundException:
+    except instaloader.exceptions.ProfileNotExistsException:
         return None, 404
     except Exception as e:
         if "429" in str(e) or "Too Many Requests" in str(e):
