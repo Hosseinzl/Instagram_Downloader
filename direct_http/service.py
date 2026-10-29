@@ -1,436 +1,452 @@
 import asyncio
-import logging
-import requests
 import json
+import logging
 import re
-import time
 import sys
+import time
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse
+
+import requests
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 from TorPool import get_tor_pool
 
-# create a reusable Stealth instance
+# Stealth instance and logging
 stealth = Stealth()
-
-# module logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-# Tor pool singleton used by this module
 tor_pool = get_tor_pool()
 
-def decode_unicode(s):
-    # In Python, JSON parsing can handle unicode escapes
-    return json.loads(f'"{s}"')
+INSTAGRAM_APP_ID = "936619743392459"
 
-def sleep(ms):
-    time.sleep(ms / 1000)
 
-async def alter1reels(url=""):
-    async with async_playwright() as p:
-        # pick a socks port from the tor pool for this browser instance
-        try:
-            proxies, idx = await tor_pool.get_next_proxies()
-            # proxies are like 'socks5h://127.0.0.1:9050'
-            socks_url = proxies.get("http", proxies.get("https", "socks5h://127.0.0.1:9050"))
-            socks_port = socks_url.split(":")[-1]
-        except Exception:
-            idx = None
-            socks_port = "9050"
-
-        # log which tor instance we selected for this browser session
-        try:
-            logger.info("alter1reels: using tor index=%s socks_port=%s", idx, socks_port)
-        except Exception:
-            pass
-
-        # Launch Playwright browser with the selected SOCKS proxy
-        browser_args = ["--no-sandbox", f"--proxy-server=socks://127.0.0.1:{socks_port}"]
-        browser = await p.chromium.launch(headless=True, args=browser_args)
-
-        page = await browser.new_page()
-        # apply Playwright stealth evasions to the created page
-        await stealth.apply_stealth_async(page)
-
-        result = {"resolved": None}
-
-        async def handle_response(response):
-            url_r = response.url
-            if "/api/convert" in url_r:
-                try:
-                    data = await response.json()
-                    urls = data.get("url", [])
-                    meta = data.get("meta", {})
-                    comment_count = meta.get("comment_count", 0)
-                    like_count = meta.get("like_count", 0)
-                    title = meta.get("title", "")
-                    shortcode = meta.get("shortcode", "")
-                    video = urls[0]["url"] if urls else ""
-                    result["resolved"] = {
-                        "code": shortcode,
-                        "images": [],
-                        "video": video,
-                        "carousel": [],
-                        "caption": title,
-                        "likes": like_count,
-                        "comments": comment_count,
-                        "type": "video"
-                    }
-                except Exception as err:
-                    pass
-
-        page.on("response", handle_response)
-
-        try:
-            await page.goto("https://sssinstagram.com/reels-downloader", wait_until="networkidle")
-            await sleep(1000)
-            # Handle consent button
-            await page.evaluate("""
-                () => {
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const consentBtn = buttons.find(btn => btn.textContent.includes('Consent'));
-                    if (consentBtn) {
-                        consentBtn.click();
-                    }
-                }
-            """)
-            await page.type("#input", url)
-            await page.click(".form__submit")
-            await sleep(3000)
-
-            # Wait up to 15 seconds for resolution
-            start_time = time.time()
-            while time.time() - start_time < 15 and not result["resolved"]:
-                await asyncio.sleep(0.1)
-
-            await page.close()
-            await browser.close()
-            return result["resolved"], None, (idx if 'idx' in locals() else None)
-        except Exception as err:
-            print(f"instagram (alter1reels): {err}")
-            await page.close()
-            await browser.close()
-            return None, None, None
-
-def default_headers():
+def default_headers() -> Dict[str, str]:
     return {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8,"
+            "application/signed-exchange;v=b3;q=0.7"
+        ),
         "Accept-Encoding": "gzip",
-        "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "max-age=0",
         "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "X-IG-App-ID": INSTAGRAM_APP_ID,
     }
 
-def _log_request_start(url, idx=None):
-    try:
-        logger.info("Request start: url=%s tor_index=%s", url, str(idx))
-    except Exception:
-        pass
 
-def parse_carousel(carousel_media=None):
-    if carousel_media is None:
-        carousel_media = []
+def extract_shortcode(url: str) -> Optional[str]:
+    """Safely extracts Instagram shortcode from /p/, /reel/, /reels/, or /tv/ paths."""
+    match = re.search(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
+    return match.group(1) if match else None
+
+
+def clean_caption(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    try:
+        return raw_text.encode("utf-8").decode("unicode_escape").strip()
+    except Exception:
+        return raw_text.strip()
+
+
+def extract_context_json(html_text: str) -> Optional[Dict[str, Any]]:
+    """Extracts contextJSON whether encoded as a JSON string or raw nested object."""
+    # Match escaped JSON string: "contextJSON":"{...}"
+    m_str = re.search(r'"contextJSON"\s*:\s*("(?:(?:\\.)|[^"\\])*")', html_text)
+    if m_str:
+        try:
+            return json.loads(json.loads(m_str.group(1)))
+        except Exception:
+            pass
+
+    # Match raw JSON object: "contextJSON":{...}
+    m_obj = re.search(r'"contextJSON"\s*:\s*(\{.+?\})\s*,\s*"\w+"', html_text)
+    if m_obj:
+        try:
+            return json.loads(m_obj.group(1))
+        except Exception:
+            pass
+
+    return None
+
+
+def parse_carousel(carousel_media: Optional[list] = None) -> list:
+    if not carousel_media:
+        return []
     items = []
     for m in carousel_media:
-        original_height = m.get("original_height")
-        original_width = m.get("original_width")
-        image_versions2 = m.get("image_versions2", {}).get("candidates", [])  # Adjusted for structure
+        orig_h = m.get("original_height")
+        orig_w = m.get("original_width")
+        image_versions = m.get("image_versions2", {}).get("candidates", [])
         video_versions = m.get("video_versions", [])
         media_type = m.get("media_type")
+
         if media_type != 2:
-            for img in image_versions2:
-                url = img.get("url")
-                height = img.get("height")
-                width = img.get("width")
-                if height == original_height and width == original_width:
-                    items.append(url)
+            matched = False
+            for img in image_versions:
+                if img.get("height") == orig_h and img.get("width") == orig_w:
+                    items.append(img.get("url"))
+                    matched = True
+                    break
+            if not matched and image_versions:
+                items.append(image_versions[0].get("url"))
         else:
             if video_versions:
                 items.append(video_versions[0].get("url"))
     return items
 
-def parse_post(source=""):
-    soup = BeautifulSoup(source, "html.parser")
-    obj = None
-    final_items = []
-    for s in soup.find("body").find_all("script"):
-        if s.get("type") == "application/json":
-            ms = s.string.strip()
-            if "xdt_api__v1__media__shortcode__web_info" in ms:
-                obj = json.loads(ms)
-                # Navigate the nested structure carefully
-                try:
-                    items_path = obj["require"][0][3][0]["__bbox"]["require"][0][3][1]["__bbox"]["result"]["data"]["xdt_api__v1__media__shortcode__web_info"]["items"]
-                    for it in items_path:
-                        code = it.get("code")
-                        pk = it.get("pk")
-                        id_ = it.get("id")
-                        video_versions = it.get("video_versions", [])
-                        image_versions2 = it.get("image_versions2", {}).get("candidates", [])
-                        caption = it.get("caption")
-                        like_count = it.get("like_count", 0)
-                        comment_count = it.get("comment_count", 0)
-                        media_type = it.get("media_type")
-                        original_height = it.get("original_height")
-                        original_width = it.get("original_width")
-                        carousel_media = it.get("carousel_media", [])
 
-                        images = []
-                        for img in image_versions2:
-                            url = img.get("url")
-                            height = img.get("height")
-                            width = img.get("width")
-                            if height == original_height and width == original_width:
-                                images.append(url)
+def parse_shortcode_media(media: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds standard normalized dictionary from GraphQL shortcode_media."""
+    id_ = media.get("id")
+    shortcode = media.get("shortcode")
+    typename = media.get("__typename", "")
 
-                        video = video_versions[0].get("url") if video_versions else None
+    # Extract caption
+    caption = ""
+    cap_edges = media.get("edge_media_to_caption", {}).get("edges", [])
+    if cap_edges:
+        caption = clean_caption(cap_edges[0].get("node", {}).get("text", ""))
 
-                        carousel = parse_carousel(carousel_media)
-                        final_items.append({
-                            "code": code,
-                            "pk": pk,
-                            "id": id_,
-                            "images": images,
-                            "video": video,
-                            "carousel": carousel,
-                            "caption": caption.get("text", "") if caption else "",
-                            "likes": like_count,
-                            "comments": comment_count,
-                            "type": "carousel" if media_type == 8 else "video" if media_type == 2 else "photo",
-                            "media_type": media_type
-                        })
-                except KeyError:
-                    pass
-    return final_items[0] if final_items else None
+    # Extract carousel items
+    carousel = []
+    sidecar_edges = media.get("edge_sidecar_to_children", {}).get("edges", [])
+    if sidecar_edges:
+        for edge in sidecar_edges:
+            node = edge.get("node", {})
+            if node.get("is_video"):
+                v_url = node.get("video_url")
+                if v_url:
+                    carousel.append(v_url)
+            else:
+                resources = node.get("display_resources", [])
+                img_src = resources[-1]["src"] if resources else node.get("display_url")
+                if img_src:
+                    carousel.append(img_src)
+    elif media.get("display_url") and not media.get("video_url"):
+        carousel.append(media.get("display_url"))
 
-def download2(short_code=""):
-    try:
-        # use a Tor proxy from the pool for this request
-        # If called from async context, callers should be awaiting the async pool getter.
-        # Here we attempt to use the pool synchronously by grabbing its current index and port.
-        # Prefer the async interface when calling from async code.
-        try:
-            # attempt to synchronously obtain an index/port via the pool (best-effort)
-            proxies, idx = asyncio.get_event_loop().run_until_complete(tor_pool.get_next_proxies())
-        except Exception:
-            # fallback to default socks port
-            proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
-            idx = None
+    # Extract single display images
+    images = []
+    if media.get("display_url"):
+        images.append(media.get("display_url"))
+    elif media.get("display_resources"):
+        images.append(media["display_resources"][-1]["src"])
 
-        _log_request_start(f"https://www.instagram.com/p/{short_code}/?direct=true", idx)
-        response = requests.get(f"https://www.instagram.com/p/{short_code}/?direct=true", headers=default_headers(), proxies=proxies, timeout=30)
-        response.raise_for_status()
-        return parse_post(response.text), response.status_code, (idx if 'idx' in locals() else None)
-    except Exception as err:
-        logger.exception("download2 failed for shortcode=%s (tor_index=%s): %s", short_code, locals().get('idx'), err)
-        return None, None, None
+    owner = media.get("owner", {}).copy()
+    for field in ["edge_owner_to_timeline_media", "edge_owner_to_timeline_video_media"]:
+        owner.pop(field, None)
 
-# tor_renew function is not defined in the original code, so implementing a stub
-# You may need to implement TOR renewal logic if required
-def tor_renew(idx=None):
-    """Synchronous shim to request a renew on a specific tor index.
+    is_video = typename == "GraphVideo" or media.get("is_video", False)
+    post_type = "carousel" if typename == "GraphSidecar" else ("video" if is_video else "photo")
 
-    If `idx` is None the pool will decide which index to renew (its previous index).
-    This helper schedules the async renew on the running loop when possible or
-    runs a temporary loop when not.
-    """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # schedule background renew for the specific index
-            asyncio.ensure_future(tor_pool.renew(idx))
-        else:
-            loop.run_until_complete(tor_pool.renew(idx))
-    except Exception:
-        # Last-resort: try running a new loop
-        try:
-            asyncio.run(tor_pool.renew(idx))
-        except Exception:
-            pass
-
-
-async def download(url="", trys=1):
-    furl = url.strip().split("?")[0]
-    if not furl.endswith("/"):
-        furl += "/"
-    furl = f"{furl}embed/captioned/"
-    furl = furl.replace("reels", "p").replace("reel", "p")
-
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
-        "Cache-Control": "max-age=0",
-        "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/46.0.2490.80",
-        "Host": "www.instagram.com",
-        "Connection": "Keep-Alive",
-        "Accept-Encoding": "gzip"
+    return {
+        "code": shortcode,
+        "pk": id_,
+        "id": id_,
+        "images": images,
+        "video": media.get("video_url"),
+        "carousel": carousel,
+        "caption": caption,
+        "likes": media.get("edge_liked_by", {}).get("count", 0),
+        "comments": media.get("edge_media_to_comment", {}).get("count", 0),
+        "type": post_type,
+        "owner": owner,
     }
 
-    status_code = None
+
+def parse_post(source: str) -> Optional[Dict[str, Any]]:
+    """Parses Instagram web responses including embedded JSON states or OpenGraph fallbacks."""
+    # 1. Parse JSON response directly
     try:
+        data = json.loads(source)
+        items = (
+            data.get("items")
+            or data.get("graphql", {}).get("shortcode_media")
+            or []
+        )
+        if isinstance(items, list) and items:
+            it = items[0]
+            carousel = parse_carousel(it.get("carousel_media", []))
+            images = [
+                img["url"] for img in it.get("image_versions2", {}).get("candidates", [])
+                if img.get("height") == it.get("original_height") and img.get("width") == it.get("original_width")
+            ]
+            if not images and it.get("image_versions2", {}).get("candidates"):
+                images.append(it["image_versions2"]["candidates"][0]["url"])
+
+            video = it.get("video_versions", [{}])[0].get("url") if it.get("video_versions") else None
+            cap_dict = it.get("caption") or {}
+            media_type = it.get("media_type")
+
+            return {
+                "code": it.get("code"),
+                "pk": it.get("pk"),
+                "id": it.get("id"),
+                "images": images,
+                "video": video,
+                "carousel": carousel,
+                "caption": cap_dict.get("text", "") if isinstance(cap_dict, dict) else "",
+                "likes": it.get("like_count", 0),
+                "comments": it.get("comment_count", 0),
+                "type": "carousel" if media_type == 8 else ("video" if media_type == 2 else "photo"),
+                "media_type": media_type,
+            }
+        elif isinstance(items, dict):
+            return parse_shortcode_media(items)
+    except Exception:
+        pass
+
+    # 2. Parse script tags inside HTML
+    soup = BeautifulSoup(source, "html.parser")
+    for s in soup.find_all("script", type="application/json"):
+        ms = s.string or ""
+        if "xdt_api__v1__media__shortcode__web_info" in ms:
+            try:
+                obj = json.loads(ms.strip())
+                items_path = obj["require"][0][3][0]["__bbox"]["require"][0][3][1]["__bbox"]["result"]["data"]["xdt_api__v1__media__shortcode__web_info"]["items"]
+                for it in items_path:
+                    images = [
+                        img["url"] for img in it.get("image_versions2", {}).get("candidates", [])
+                        if img.get("height") == it.get("original_height") and img.get("width") == it.get("original_width")
+                    ]
+                    video = it.get("video_versions", [{}])[0].get("url") if it.get("video_versions") else None
+                    caption = it.get("caption") or {}
+                    media_type = it.get("media_type")
+
+                    return {
+                        "code": it.get("code"),
+                        "pk": it.get("pk"),
+                        "id": it.get("id"),
+                        "images": images,
+                        "video": video,
+                        "carousel": parse_carousel(it.get("carousel_media", [])),
+                        "caption": caption.get("text", "") if isinstance(caption, dict) else "",
+                        "likes": it.get("like_count", 0),
+                        "comments": it.get("comment_count", 0),
+                        "type": "carousel" if media_type == 8 else ("video" if media_type == 2 else "photo"),
+                        "media_type": media_type,
+                    }
+            except (KeyError, IndexError, json.JSONDecodeError):
+                continue
+
+    # 3. OpenGraph fallback
+    og_img = soup.select_one('meta[property="og:image"]')
+    og_vid = soup.select_one('meta[property="og:video"]')
+    og_desc = soup.select_one('meta[property="og:description"]')
+    if og_img or og_vid:
+        img_url = og_img.get("content") if og_img else None
+        vid_url = og_vid.get("content") if og_vid else None
+        return {
+            "code": None,
+            "pk": None,
+            "id": None,
+            "images": [img_url] if img_url else [],
+            "video": vid_url,
+            "carousel": [],
+            "caption": og_desc.get("content", "") if og_desc else "",
+            "likes": 0,
+            "comments": 0,
+            "type": "video" if vid_url else "photo",
+        }
+
+    return None
+
+
+async def alter1reels(url: str = "") -> Tuple[Optional[Dict[str, Any]], Optional[int], Optional[int]]:
+    """Playwright stealth scraper fallback."""
+    idx = None
+    try:
+        proxies, idx = await tor_pool.get_next_proxies()
+        socks_url = proxies.get("http", proxies.get("https", "socks5h://127.0.0.1:9050"))
+        socks_port = socks_url.split(":")[-1]
+    except Exception:
+        socks_port = "9050"
+
+    logger.info("alter1reels: using tor index=%s socks_port=%s", idx, socks_port)
+    browser_args = ["--no-sandbox", f"--proxy-server=socks5://127.0.0.1:{socks_port}"]
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=browser_args)
+        page = await browser.new_page()
+        await stealth.apply_stealth_async(page)
+
+        result: Dict[str, Any] = {"resolved": None}
+
+        async def handle_response(response):
+            if "/api/convert" in response.url:
+                try:
+                    data = await response.json()
+                    urls = data.get("url", [])
+                    meta = data.get("meta", {})
+                    video = urls[0]["url"] if urls else ""
+                    result["resolved"] = {
+                        "code": meta.get("shortcode", ""),
+                        "images": [],
+                        "video": video,
+                        "carousel": [],
+                        "caption": meta.get("title", ""),
+                        "likes": meta.get("like_count", 0),
+                        "comments": meta.get("comment_count", 0),
+                        "type": "video",
+                    }
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+
+        try:
+            await page.goto("https://sssinstagram.com/reels-downloader", wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(1)
+
+            await page.evaluate("""
+                () => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const consentBtn = buttons.find(btn => btn.textContent.includes('Consent'));
+                    if (consentBtn) consentBtn.click();
+                }
+            """)
+            await page.fill("#input", url)
+            await page.click(".form__submit")
+            await asyncio.sleep(3)
+
+            start_time = time.time()
+            while time.time() - start_time < 15 and not result["resolved"]:
+                await asyncio.sleep(0.2)
+
+            return result["resolved"], 200, idx
+        except Exception as err:
+            logger.error("alter1reels failed: %s", err)
+            return None, None, idx
+        finally:
+            await page.close()
+            await browser.close()
+
+
+async def download2(
+    short_code: str = "",
+    proxies: Optional[Dict[str, str]] = None,
+    idx: Optional[int] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[int], Optional[int]]:
+    """Async wrapper around Instagram web info endpoint."""
+    if not proxies:
         try:
             proxies, idx = await tor_pool.get_next_proxies()
-            try:
-                socks_url = proxies.get("http") or proxies.get("https")
-                socks_port = socks_url.split(":")[-1] if socks_url else "?"
-                logger.info("Request: url=%s tor_index=%s socks_port=%s", furl, idx, socks_port)
-            except Exception:
-                pass
         except Exception:
             proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
 
-        response = requests.get(furl, headers=headers, proxies=proxies, timeout=30)
+    # Query with API parameters for JSON payload
+    req_url = f"https://www.instagram.com/p/{short_code}/?__a=1&__d=dis"
+    logger.info("Request download2: url=%s tor_index=%s", req_url, idx)
+
+    try:
+        response = await asyncio.to_thread(
+            requests.get,
+            req_url,
+            headers=default_headers(),
+            proxies=proxies,
+            timeout=25,
+        )
+        parsed = parse_post(response.text)
+        if parsed and (parsed.get("images") or parsed.get("video") or parsed.get("carousel")):
+            return parsed, response.status_code, idx
+    except Exception as err:
+        logger.warning("download2 failed for shortcode=%s: %s", short_code, err)
+
+    return None, None, idx
+
+
+async def download(url: str = "", trys: int = 1) -> Tuple[Optional[Dict[str, Any]], Optional[int], Optional[int]]:
+    """Primary fetch method utilizing embed extraction and automatic multi-stage fallbacks."""
+    shortcode = extract_shortcode(url)
+    if not shortcode:
+        logger.error("Could not extract shortcode from url: %s", url)
+        return None, None, None
+
+    furl = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+    idx = None
+    try:
+        proxies, idx = await tor_pool.get_next_proxies()
+    except Exception:
+        proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+
+    try:
+        logger.info("GET embed attempt %d: url=%s tor_index=%s", trys, furl, idx)
+        response = await asyncio.to_thread(
+            requests.get,
+            furl,
+            headers=default_headers(),
+            proxies=proxies,
+            timeout=25,
+        )
         status_code = response.status_code
-        response.raise_for_status()
         data = response.text
 
-        regex = r'"contextJSON"\s*:\s*"(\{.*?\})"'
-        match = re.search(regex, data)
+        # 1. Guard against broken or deleted post embeds
+        soup = BeautifulSoup(data, "html.parser")
+        if soup.select_one(".EmbedBrokenMedia"):
+            logger.warning("Embed returned EmbedBrokenMedia for shortcode=%s", shortcode)
+            # Escalate to direct download2 instead of failing or returning empty data
+            res_d2, sc_d2, idx_d2 = await download2(shortcode, proxies=proxies, idx=idx)
+            if res_d2:
+                return res_d2, sc_d2, idx_d2
+            raise ValueError("Post is removed, private, or blocked by Instagram.")
 
-        if match:
-            raw_json = match.group(1)
-            raw_json = raw_json.replace('\\"', '"').replace('\\\\"', "").replace('\\/', "/").replace('\\\\/', '/').replace('\\/', '/')
-            parsed = json.loads(raw_json)
-            
-            # استفاده از ساختار جدید gql_data
-            media = parsed.get("gql_data", {}).get("shortcode_media", {})
-            
-            id_ = media.get("id")
-            shortcode = media.get("shortcode")
-            typename = media.get("__typename")
-            
-            # استخراج مقادیر جدید
-            video_url = media.get("video_url")
-            likes_count = media.get("edge_liked_by", {}).get("count", 0)
-            comments_count = media.get("edge_media_to_comment", {}).get("count", 0)
-            edge_media_to_caption = media.get("edge_media_to_caption", {})
-            owner = media.get("owner", {})
+        # 2. Extract and parse contextJSON
+        parsed_context = extract_context_json(data)
+        if parsed_context:
+            media = parsed_context.get("gql_data", {}).get("shortcode_media", {})
+            if media:
+                data_dict = parse_shortcode_media(media)
+                if data_dict.get("images") or data_dict.get("video") or data_dict.get("carousel"):
+                    return data_dict, status_code, idx
 
-            # حذف فیلدهای ناخواسته از owner (در صورت وجود)
-            UNWANTED_OWNER_FIELDS = [
-                "edge_owner_to_timeline_media",
-                "edge_owner_to_timeline_video_media"
-            ]
-            for field in UNWANTED_OWNER_FIELDS:
-                owner.pop(field, None)
+        # 3. Check OpenGraph tags within embed HTML
+        og_fallback = parse_post(data)
+        if og_fallback and (og_fallback.get("images") or og_fallback.get("video")):
+            return og_fallback, status_code, idx
 
-            # استخراج کپشن
-            caption = ""
-            edges = edge_media_to_caption.get("edges", [])
-            if edges:
-                try:
-                    # فرض بر این است که decode_unicode قبلا در فایل شما تعریف شده
-                    caption = decode_unicode(edges[0]["node"]["text"].strip())
-                except NameError:
-                    caption = edges[0]["node"]["text"].strip()
+        raise ValueError("Failed to extract media attributes from embed response.")
 
-            # بررسی اسلایدر (در صورت وجود در ساختار جدید)
-            edge_sidecar_to_children = media.get("edge_sidecar_to_children", {}).get("edges", [])
-            carousel = []
-            if edge_sidecar_to_children:
-                for e in edge_sidecar_to_children:
-                    node = e["node"]
-                    is_video = node.get("is_video", False)
-                    if is_video:
-                        carousel.append(node.get("video_url"))
-                    else:
-                        display_resources = node.get("display_resources", [])
-                        if display_resources:
-                            carousel.append(display_resources[-1]["src"])
-            elif media.get("display_url") and not video_url:
-                # اگر اسلایدر نبود و ویدیو هم نبود، عکس اصلی را اضافه کن
-                carousel.append(media.get("display_url"))
-
-            # تعیین نوع پست
-            if typename == "GraphSidecar":
-                post_type = "carousel"
-            elif typename == "GraphVideo" or media.get("is_video"):
-                post_type = "video"
-            else:
-                post_type = "photo"
-
-            data_dict = {
-                "code": shortcode,
-                "pk": id_,
-                "id": id_,
-                "images": [media.get("display_url")] if media.get("display_url") else [],
-                "video": video_url,
-                "mode": typename,
-                "carousel": carousel,
-                "caption": caption,
-                "likes": likes_count,
-                "comments": comments_count,
-                "type": post_type,
-                "owner": owner
-            }
-            return data_dict, status_code, (idx if 'idx' in locals() else None)
-        else:
-            # Fallback HTML parsing
-            soup = BeautifulSoup(data, "html.parser")
-            image_element = soup.select_one(".EmbeddedMedia img")
-            image = image_element["src"] if image_element else None
-            caption = ""
-            try:
-                caption_element = soup.select_one(".Caption")
-                if caption_element:
-                    caption_element.select_one(".CaptionUsername").decompose()
-                    caption = caption_element.get_text(strip=True).replace("&#064;", "#")
-            except Exception as err:
-                print(err)
-            return {
-                "images": [image] if image else [],
-                "video": None,
-                "carousel": [],
-                "caption": caption,
-                "likes": 0,
-                "comments": 0,
-                "type": "photo"
-            }, status_code, (idx if 'idx' in locals() else None)
     except Exception as err:
-        print(f"instagram (try {trys}): {err}")
+        logger.warning("Instagram embed attempt %d failed: %s", trys, err)
+
+    # 4. Multi-stage Fallback and Retry Pipeline
+    if trys == 1:
+        logger.info("Escalating to download2 fallback for %s...", shortcode)
+        result2, sc2, idx2 = await download2(shortcode, proxies=proxies, idx=idx)
+        if result2:
+            return result2, sc2, idx2
+
+    if trys == 2:
+        logger.info("Escalating to alter1reels Playwright fallback for %s...", url)
+        result_alt, sc_alt, idx_alt = await alter1reels(url)
+        if result_alt:
+            return result_alt, sc_alt, idx_alt
+
+    if trys < 3:
         try:
-            await tor_pool.renew(idx if 'idx' in locals() else None)
+            logger.info("Renewing TOR identity on index %s...", idx)
+            await tor_pool.renew(idx)
         except Exception:
             pass
-
-    # Retry logic
-    if trys <= 3:
-        if trys >= 3:
-            print(f"Attempting alter1reels (try {trys})...")
-            result = await alter1reels(url)
-            if result and result[0]:
-                return result
-        elif trys == 2:
-            print(f"Attempting download2 (try {trys})...")
-            shortcode = url.split("/")[-2] if "/p/" in url or "/reel/" in url else ""
-            result = download2(shortcode)
-            if result and result[0]:
-                return result
-
-        print(f"Retrying with TOR renewal (try {trys + 1})...")
-        try:
-            tor_renew(idx if 'idx' in locals() else None)
-        except Exception:
-            pass
-            
+        await asyncio.sleep(1)
         return await download(url, trys + 1)
-        
-    print("All retry attempts failed.")
-    return None, None, None
+
+    logger.error("All extraction stages exhausted for URL: %s", url)
+    return None, None, idx
