@@ -2,6 +2,8 @@ import asyncio
 import logging
 import random
 from typing import Any, Dict, Optional, Tuple
+import os
+from dotenv import load_dotenv
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -15,13 +17,41 @@ from sqlite_db import async_log_request, init_db
 from direct_http.service import download as direct_http_download
 from Instaloader.Instaloader_service import extract_instagram_data as instaloader_download
 
+load_dotenv()
+
+ENABLE_DIRECT_HTTP = (
+    os.getenv("ENABLE_DIRECT_HTTP", "true").lower() == "true"
+)
+
+ENABLE_INSTALOADER = (
+    os.getenv("ENABLE_INSTALOADER", "true").lower() == "true"
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("api_server")
 
 app = FastAPI(title="Local Tor Downloader API", version="0.2")
 
-# Initialize sqlite DB for request logging
-init_db()
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+
+    enabled_services = []
+
+    if ENABLE_DIRECT_HTTP:
+        enabled_services.append("direct_http")
+
+    if ENABLE_INSTALOADER:
+        enabled_services.append("instaloader")
+
+    if not enabled_services:
+        logger.critical("No download services are enabled! Shutting down.")
+        raise RuntimeError("At least one download service must be enabled.")
+
+    logger.info("=" * 50)
+    logger.info("Active download services: %s", ", ".join(enabled_services))
+    logger.info("=" * 50)
+
 
 
 class DownloadRequest(BaseModel):
@@ -30,14 +60,14 @@ class DownloadRequest(BaseModel):
 
 
 async def execute_download_pipeline(url: str) -> Tuple[Dict[str, Any], int, Optional[int], str]:
-    """
-    Randomly selects either direct_http or Instaloader.
-    If the chosen service fails or returns no data, fails over to the other.
-    """
-    services = [
-        ("direct_http", direct_http_download),
-        ("instaloader", instaloader_download),
-    ]
+
+    services = []
+
+    if ENABLE_DIRECT_HTTP:
+        services.append(("direct_http", direct_http_download))
+
+    if ENABLE_INSTALOADER:
+        services.append(("instaloader", instaloader_download))
 
     # Randomize order for 50/50 load balancing
     random.shuffle(services)
@@ -48,26 +78,35 @@ async def execute_download_pipeline(url: str) -> Tuple[Dict[str, Any], int, Opti
 
     for service_name, service_func in services:
         logger.info(f"Dispatching request for {url} using [{service_name}]")
+
         try:
             result, status, tor_index = await service_func(url)
+
             last_status = status or last_status
             last_tor_index = tor_index
 
-            # Check if extraction was successful
-            if result and (result.get("images") or result.get("video") or result.get("carousel")):
+            if result and (
+                result.get("images")
+                or result.get("video")
+                or result.get("carousel")
+            ):
                 logger.info(f"[{service_name}] succeeded for {url}")
                 return result, status or 200, tor_index, service_name
 
             logger.warning(
-                f"[{service_name}] returned empty data (status={status}). Escalating to fallback..."
+                f"[{service_name}] returned empty data (status={status}). "
+                "Escalating to fallback..."
             )
+
             last_error_msg = f"{service_name} returned empty data"
 
         except Exception as exc:
-            logger.error(f"[{service_name}] encountered exception: {exc}. Escalating to fallback...")
+            logger.error(
+                f"[{service_name}] encountered exception: {exc}. "
+                "Escalating to fallback..."
+            )
             last_error_msg = str(exc)
 
-    # Both services failed
     raise HTTPException(
         status_code=502,
         detail={
