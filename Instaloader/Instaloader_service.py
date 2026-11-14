@@ -35,6 +35,66 @@ BROWSER_HEADERS = {
 }
 
 
+# Instagram serves this generic placeholder/logo image when a Tor exit node is
+# silently blocked: the page answers HTTP 200 OK but the only media present is
+# this static cdninstagram asset, so there is nothing to download. Detecting it
+# lets the caller treat the response as a burned exit, renew the Tor circuit,
+# and retry instead of returning empty-looking media.
+INSTAGRAM_PLACEHOLDER_IMAGE = "https://static.cdninstagram.com/rsrc.php/v4/yD/r/R0fBIMurK8v.png"
+_PLACEHOLDER_TOKEN = "R0fBIMurK8v"
+
+
+def _is_placeholder_url(url: Optional[str]) -> bool:
+    """True when *url* is Instagram's generic placeholder/logo image.
+
+    Matched on a unique path fragment so query strings or trailing slashes do
+    not defeat the check.
+    """
+    if not url:
+        return False
+    return _PLACEHOLDER_TOKEN in str(url)
+
+
+def _flatten_media_urls(data: Optional[Dict[str, Any]]) -> list:
+    """Collect every media URL carried by a normalized post dict (video + images + carousel).
+
+    Carousel entries may be either plain URL strings or ``{"type", "url"}`` dicts;
+    both shapes are handled.
+    """
+    if not data:
+        return []
+    urls: list = []
+    video = data.get("video")
+    if video:
+        urls.append(video)
+    for bucket in ("images", "carousel"):
+        for item in (data.get(bucket) or []):
+            url = item.get("url") if isinstance(item, dict) else item
+            if url:
+                urls.append(url)
+    return urls
+
+
+def has_real_media(data: Optional[Dict[str, Any]]) -> bool:
+    """A parsed post is only 'real' when it carries at least one non-placeholder media URL."""
+    if not data:
+        return False
+    return any(not _is_placeholder_url(u) for u in _flatten_media_urls(data))
+
+
+def is_placeholder_only(data: Optional[Dict[str, Any]]) -> bool:
+    """True when Instagram answered with media that is *only* the placeholder image.
+
+    This is the silent-block signature: HTTP 200 OK but every media URL present is
+    the generic cdninstagram placeholder logo. The caller should renew the Tor
+    circuit and retry instead of returning this empty-looking result.
+    """
+    if not data:
+        return False
+    urls = _flatten_media_urls(data)
+    return bool(urls) and all(_is_placeholder_url(u) for u in urls)
+
+
 def parse_shortcode(url: str) -> str:
     """Extracts shortcode reliably across various URL formats."""
     match = re.search(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
@@ -200,14 +260,25 @@ async def extract_instagram_data(url: str):
             logger.info(f"[Attempt {attempt + 1}/{max_retries}] Tor Index {idx} for {shortcode}")
 
         # Stage 1: Fast embed retrieval (rarely triggers 429)
-        data = await fetch_embed_stage(shortcode, proxies)
-        if data and (data.get("images") or data.get("video") or data.get("carousel")):
-            return data, 200, idx
+        embed_data = await fetch_embed_stage(shortcode, proxies)
+        if has_real_media(embed_data):
+            return embed_data, 200, idx
 
         # Stage 2: Instaloader GraphQL retrieval
         data, status = await fetch_instaloader_stage(shortcode, proxies)
-        if data:
+        if has_real_media(data):
             return data, 200, idx
+
+        # Instagram can answer a burned Tor exit with HTTP 200 whose only media is the
+        # generic cdninstagram placeholder logo (no 429, just an empty-looking page).
+        # Treat that signature exactly like a 429: the exit is silently blocked, so
+        # renew the Tor circuit and retry on the next loop iteration.
+        if is_placeholder_only(embed_data) or is_placeholder_only(data):
+            logger.warning(
+                f"Tor exit node {idx} returned placeholder-only media for {shortcode}. "
+                f"Treating as burned exit and renewing circuit..."
+            )
+            status = 429
 
         # Handle rate limiting specifically
         if status == 429:

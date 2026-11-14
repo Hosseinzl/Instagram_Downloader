@@ -49,6 +49,66 @@ def default_headers() -> Dict[str, str]:
     }
 
 
+# Instagram serves this generic placeholder/logo image when a Tor exit node is
+# silently blocked: the page answers HTTP 200 OK but the only media present is
+# this static cdninstagram asset, so there is nothing to download. Detecting it
+# lets every return path treat the response as a burned exit so the caller
+# rotates the Tor circuit and retries instead of returning empty-looking media.
+INSTAGRAM_PLACEHOLDER_IMAGE = "https://static.cdninstagram.com/rsrc.php/v4/yD/r/R0fBIMurK8v.png"
+_PLACEHOLDER_TOKEN = "R0fBIMurK8v"
+
+
+def _is_placeholder_url(url: Optional[str]) -> bool:
+    """True when *url* is Instagram's generic placeholder/logo image.
+
+    Matched on a unique path fragment so query strings or trailing slashes do
+    not defeat the check.
+    """
+    if not url:
+        return False
+    return _PLACEHOLDER_TOKEN in str(url)
+
+
+def _flatten_media_urls(data: Optional[Dict[str, Any]]) -> list:
+    """Collect every media URL carried by a normalized post dict (video + images + carousel).
+
+    Carousel entries may be either plain URL strings or ``{"type", "url"}`` dicts;
+    both shapes are handled.
+    """
+    if not data:
+        return []
+    urls: list = []
+    video = data.get("video")
+    if video:
+        urls.append(video)
+    for bucket in ("images", "carousel"):
+        for item in (data.get(bucket) or []):
+            url = item.get("url") if isinstance(item, dict) else item
+            if url:
+                urls.append(url)
+    return urls
+
+
+def has_real_media(data: Optional[Dict[str, Any]]) -> bool:
+    """A parsed post is only 'real' when it carries at least one non-placeholder media URL."""
+    if not data:
+        return False
+    return any(not _is_placeholder_url(u) for u in _flatten_media_urls(data))
+
+
+def is_placeholder_only(data: Optional[Dict[str, Any]]) -> bool:
+    """True when Instagram answered with media that is *only* the placeholder image.
+
+    This is the silent-block signature: HTTP 200 OK but every media URL present is
+    the generic cdninstagram placeholder logo. The caller should renew the Tor
+    circuit and retry instead of returning this empty-looking result.
+    """
+    if not data:
+        return False
+    urls = _flatten_media_urls(data)
+    return bool(urls) and all(_is_placeholder_url(u) for u in urls)
+
+
 def extract_shortcode(url: str) -> Optional[str]:
     """Safely extracts Instagram shortcode from /p/, /reel/, /reels/, or /tv/ paths."""
     match = re.search(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
@@ -374,8 +434,13 @@ async def download2(
             timeout=25,
         )
         parsed = parse_post(response.text)
-        if parsed and (parsed.get("images") or parsed.get("video") or parsed.get("carousel")):
+        if has_real_media(parsed):
             return parsed, response.status_code, idx
+        if is_placeholder_only(parsed):
+            logger.warning(
+                "download2: Instagram returned placeholder-only media for shortcode=%s "
+                "(burned Tor exit, will renew and retry).", short_code,
+            )
     except Exception as err:
         logger.warning("download2 failed for shortcode=%s: %s", short_code, err)
 
@@ -414,7 +479,7 @@ async def download(url: str = "", trys: int = 1) -> Tuple[Optional[Dict[str, Any
             logger.warning("Embed returned EmbedBrokenMedia for shortcode=%s", shortcode)
             # Escalate to direct download2 instead of failing or returning empty data
             res_d2, sc_d2, idx_d2 = await download2(shortcode, proxies=proxies, idx=idx)
-            if res_d2:
+            if has_real_media(res_d2):
                 return res_d2, sc_d2, idx_d2
             raise ValueError("Post is removed, private, or blocked by Instagram.")
 
@@ -424,13 +489,23 @@ async def download(url: str = "", trys: int = 1) -> Tuple[Optional[Dict[str, Any
             media = parsed_context.get("gql_data", {}).get("shortcode_media", {})
             if media:
                 data_dict = parse_shortcode_media(media)
-                if data_dict.get("images") or data_dict.get("video") or data_dict.get("carousel"):
+                if has_real_media(data_dict):
                     return data_dict, status_code, idx
+                if is_placeholder_only(data_dict):
+                    logger.warning(
+                        "Embed contextJSON returned placeholder-only media for shortcode=%s "
+                        "(burned Tor exit, will renew and retry).", shortcode,
+                    )
 
         # 3. Check OpenGraph tags within embed HTML
         og_fallback = parse_post(data)
-        if og_fallback and (og_fallback.get("images") or og_fallback.get("video")):
+        if has_real_media(og_fallback):
             return og_fallback, status_code, idx
+        if is_placeholder_only(og_fallback):
+            logger.warning(
+                "Embed OpenGraph returned placeholder-only media for shortcode=%s "
+                "(burned Tor exit, will renew and retry).", shortcode,
+            )
 
         raise ValueError("Failed to extract media attributes from embed response.")
 
@@ -441,13 +516,13 @@ async def download(url: str = "", trys: int = 1) -> Tuple[Optional[Dict[str, Any
     if trys == 1:
         logger.info("Escalating to download2 fallback for %s...", shortcode)
         result2, sc2, idx2 = await download2(shortcode, proxies=proxies, idx=idx)
-        if result2:
+        if has_real_media(result2):
             return result2, sc2, idx2
 
     if trys == 2:
         logger.info("Escalating to alter1reels Playwright fallback for %s...", url)
         result_alt, sc_alt, idx_alt = await alter1reels(url)
-        if result_alt:
+        if has_real_media(result_alt):
             return result_alt, sc_alt, idx_alt
 
     if trys < 3:
